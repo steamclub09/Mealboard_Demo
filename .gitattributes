@@ -1,0 +1,5 @@
+# Windows 에서 편집해도 Pi(리눅스)가 읽을 파일은 LF 줄바꿈을 유지한다.
+# CRLF 로 저장되면 setup_pi.sh 실행 시 "bad interpreter: /usr/bin/env bash^M" 에러가 난다.
+*.sh text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
