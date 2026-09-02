@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>급식실 대기 안내</title>
+<link rel="manifest" href="/manifest.json">
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; background: #f4f6f4; color: #1a2a22; }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  .card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px;
+          box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .wait { font-size: 64px; font-weight: 700; line-height: 1; }
+  .wait small { font-size: 20px; font-weight: 400; margin-left: 4px; }
+  .row { display: flex; gap: 24px; margin-top: 12px; color: #555; }
+  .row b { color: #1a2a22; }
+  #state { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px;
+           background: #dfe9e3; }
+  #state[data-state="no_data"] { background: #f2d9d9; }
+  #state[data-state="insufficient_rate"] { background: #f5ecd0; }
+  canvas { width: 100%; height: 120px; display: block; }
+  ul { margin: 8px 0 0; padding-left: 20px; }
+  .bar { display: grid; grid-template-columns: 130px 1fr 48px; align-items: center;
+         gap: 8px; font-size: 13px; margin: 4px 0; }
+  .track { position: relative; height: 10px; background: #e8ece9; border-radius: 5px; overflow: hidden; }
+  .track i { position: absolute; left: 0; top: 0; bottom: 0; background: #4a8a68; }
+  .track i.부족 { background: #c9573f; }
+  .track i.과다 { background: #d9a441; }
+  .track::after { content: ""; position: absolute; left: 66.7%; top: 0; bottom: 0;
+                  width: 2px; background: #1a2a22; }    /* 권장섭취량(100%) 위치 */
+  .muted { color: #777; font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <section class="card">
+    <div class="muted">지금 줄을 서면</div>
+    <div class="wait"><span id="wait">–</span><small>분 예상</small></div>
+    <div class="row">
+      <div>대기 <b id="queue">–</b>명</div>
+      <div>분당 <b id="rate">–</b>명 처리</div>
+      <div><span id="state">–</span></div>
+    </div>
+    <div class="muted" style="margin-top:8px">갱신 <span id="updated"></span> · 30초마다 자동 갱신 · 추정치이며 실제 배식 상황에 따라 달라질 수 있습니다</div>
+  </section>
+
+  <section class="card">
+    <div class="muted">최근 2시간 예상 대기시간</div>
+    <canvas id="chart" width="600" height="120"></canvas>
+  </section>
+
+  <section class="card">
+    <div class="muted">오늘 중식 (NEIS)</div>
+    <ul id="menu"></ul>
+    <div class="row">
+      <div>에너지 <b id="energy">–</b></div>
+      <div>미량영양소 충족 <b id="mar">–</b></div>
+    </div>
+    <div class="muted" id="ratio" style="margin-top:6px"></div>
+    <div id="micro" style="margin-top:10px"></div>
+    <div class="muted" id="stdnote" style="margin-top:8px"></div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const j = async u => (await fetch(u, { cache: "no-store" })).json();
+const STATE_KO = { ok: "정상", no_data: "데이터 없음", insufficient_rate: "배식 시작 대기" };
+
+async function refresh() {
+  const st = await j("/api/status");
+  $("#wait").textContent = st.wait_min == null ? "–" : st.wait_min;
+  $("#queue").textContent = st.queue_len ?? "–";
+  $("#rate").textContent = st.rate_per_min ?? "–";
+  $("#state").textContent = STATE_KO[st.state] || st.state;
+  $("#state").dataset.state = st.state;
+  $("#updated").textContent = st.updated_at
+    ? new Date(st.updated_at).toLocaleTimeString("ko-KR") : "–";
+  const h = await j("/api/history?minutes=120");
+  drawChart(h.rows);
+}
+
+function drawChart(rows) {
+  const c = $("#chart"), g = c.getContext("2d");
+  g.clearRect(0, 0, c.width, c.height);
+  const pts = rows.filter(r => r.wait_min != null);
+  if (pts.length < 2) return;
+  const max = Math.max(5, ...pts.map(r => r.wait_min));
+  g.beginPath(); g.strokeStyle = "#4a8a68"; g.lineWidth = 2;
+  pts.forEach((r, i) => {
+    const x = i / (pts.length - 1) * c.width;
+    const y = c.height - r.wait_min / max * (c.height - 10) - 5;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  });
+  g.stroke();
+}
+
+async function loadMeal() {
+  const m = await j("/api/meal");
+  if (m.state !== "ok" || !m.today) {
+    $("#menu").innerHTML = "<li>" + (m.state === "no_meal"
+      ? "이번 주 급식 정보가 없습니다" : "급식 정보를 아직 받지 못했습니다") + "</li>";
+    return;
+  }
+  $("#menu").innerHTML = m.today.menu.map(x => `<li>${x}</li>`).join("");
+  const a = m.today.assess;
+  $("#energy").textContent = a.energy_pct == null ? "–" : a.energy_pct + "%";
+  $("#mar").textContent = a.mar == null ? "–" : a.mar + "%";
+  const r = a.macro_ratio;
+  $("#ratio").textContent =
+    `에너지 비율 탄수화물 ${r.carb}% · 단백질 ${r.protein}% · 지방 ${r.fat}%` +
+    (a.macro_ratio_ok ? " (적정 범위)" : " (범위 밖)");
+  $("#micro").innerHTML = a.micro.map(x =>
+    `<div class="bar"><span>${x.label}</span>
+      <div class="track"><i class="${x.band}" style="width:${Math.min(x.pct, 150) / 1.5}%"></i></div>
+      <b>${x.pct}%</b></div>`).join("");
+  $("#stdnote").textContent =
+    `기준: ${m.std.group} · ${m.std.source} · 세로선 = 권장섭취량. 영양교사 산출값 기준 참고 지표입니다.`;
+}
+
+refresh(); loadMeal();
+setInterval(refresh, 30000);
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js");
+</script>
+</body>
+</html>
